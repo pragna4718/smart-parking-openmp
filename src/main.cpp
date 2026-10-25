@@ -588,13 +588,13 @@ bool runScenario(const std::string& name, int floors, int rows, int cols, int ve
     // 1. Serial Allocation
     std::vector<AllocationResult> serial_results;
     auto serial_slots = original_slots;
-    auto t0 = std::chrono::steady_clock::now();
+    double t0 = omp_get_wtime();
     for (int rep = 0; rep < repeat_count; ++rep) {
         serial_slots = original_slots;
         serial_results = allocateSerial(serial_slots, requests, CostWeights());
     }
-    auto t1 = std::chrono::steady_clock::now();
-    double serial_ms = std::chrono::duration<double, std::micro>(t1 - t0).count() / (1000.0 * repeat_count);
+    double t1 = omp_get_wtime();
+    double serial_ms = ((t1 - t0) * 1000.0) / repeat_count;
 
     auto serial_report = validateAllocation(serial_results, original_slots, requests);
     printValidationReport("Serial Baseline (" + name + ")", serial_report);
@@ -602,13 +602,13 @@ bool runScenario(const std::string& name, int floors, int rows, int cols, int ve
     // 2. Parallel Allocation
     std::vector<AllocationResult> parallel_results;
     auto parallel_slots = original_slots;
-    auto t2 = std::chrono::steady_clock::now();
+    double t2 = omp_get_wtime();
     for (int rep = 0; rep < repeat_count; ++rep) {
         parallel_slots = original_slots;
         parallel_results = allocateParallel(parallel_slots, requests, threads, CostWeights());
     }
-    auto t3 = std::chrono::steady_clock::now();
-    double parallel_ms = std::chrono::duration<double, std::micro>(t3 - t2).count() / (1000.0 * repeat_count);
+    double t3 = omp_get_wtime();
+    double parallel_ms = ((t3 - t2) * 1000.0) / repeat_count;
 
     auto parallel_report = validateAllocation(parallel_results, original_slots, requests);
     printValidationReport("OpenMP Parallel (" + name + ")", parallel_report);
@@ -717,31 +717,83 @@ int runTestSuite() {
     }
 }
 
+void factorSlots(int total_slots, int& floors, int& rows, int& cols) {
+    if (total_slots <= 0) total_slots = 5000;
+    if (total_slots < 50) {
+        floors = 1;
+        rows = 1;
+        cols = total_slots;
+    } else if (total_slots <= 200) {
+        floors = 2;
+        int per_floor = (total_slots + floors - 1) / floors;
+        rows = (per_floor <= 25) ? 5 : 10;
+        cols = (per_floor + rows - 1) / rows;
+    } else if (total_slots <= 1200) {
+        floors = 4;
+        int per_floor = (total_slots + floors - 1) / floors;
+        rows = 10;
+        cols = (per_floor + rows - 1) / rows;
+    } else {
+        floors = 4;
+        int per_floor = (total_slots + floors - 1) / floors;
+        rows = 25;
+        cols = (per_floor + rows - 1) / rows;
+    }
+}
+
 int main(int argc, char* argv[]) {
     // Default parameters
     int floors = 4;
     int rows = 25;
     int cols = 50; // 4 * 25 * 50 = 5000 slots
+    int total_slots = 5000;
     int vehicles = 3500;
-    int threads = 0; // 0 means default to omp_get_max_threads()
+    unsigned int seed = 42;
+    int threads = 0; // 0 means default to omp_get_max_threads() or OMP_NUM_THREADS
     std::string mode = "both";
     std::string csv_file = "";
     bool run_benchmark = false;
+    bool explicit_floors = false;
+    bool explicit_slots = false;
 
-    // Parse CLI arguments
+    // Support positional arguments: ./smart_parking.exe [N] [M] [seed] [mode]
+    int pos_idx = 1;
+    if (pos_idx < argc && argv[pos_idx][0] != '-') {
+        vehicles = std::atoi(argv[pos_idx++]);
+    }
+    if (pos_idx < argc && argv[pos_idx][0] != '-') {
+        total_slots = std::atoi(argv[pos_idx++]);
+        explicit_slots = true;
+    }
+    if (pos_idx < argc && argv[pos_idx][0] != '-') {
+        seed = static_cast<unsigned int>(std::strtoul(argv[pos_idx++], nullptr, 10));
+    }
+    if (pos_idx < argc && argv[pos_idx][0] != '-') {
+        mode = argv[pos_idx++];
+    }
+
+    // Parse CLI flag options
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--floors" && i + 1 < argc) {
             floors = std::atoi(argv[++i]);
+            explicit_floors = true;
         } else if (arg == "--rows" && i + 1 < argc) {
             rows = std::atoi(argv[++i]);
+            explicit_floors = true;
         } else if (arg == "--cols" && i + 1 < argc) {
             cols = std::atoi(argv[++i]);
-        } else if (arg == "--vehicles" && i + 1 < argc) {
+            explicit_floors = true;
+        } else if ((arg == "--vehicles" || arg == "-N") && i + 1 < argc) {
             vehicles = std::atoi(argv[++i]);
-        } else if (arg == "--threads" && i + 1 < argc) {
+        } else if ((arg == "--slots" || arg == "-M") && i + 1 < argc) {
+            total_slots = std::atoi(argv[++i]);
+            explicit_slots = true;
+        } else if ((arg == "--seed" || arg == "-s") && i + 1 < argc) {
+            seed = static_cast<unsigned int>(std::strtoul(argv[++i], nullptr, 10));
+        } else if ((arg == "--threads" || arg == "-t") && i + 1 < argc) {
             threads = std::atoi(argv[++i]);
-        } else if (arg == "--mode" && i + 1 < argc) {
+        } else if ((arg == "--mode" || arg == "-m") && i + 1 < argc) {
             mode = argv[++i];
         } else if (arg == "--csv" && i + 1 < argc) {
             csv_file = argv[++i];
@@ -751,14 +803,22 @@ int main(int argc, char* argv[]) {
             mode = "test";
         } else if (arg == "--help" || arg == "-h") {
             std::cout << "Parallel Smart Parking Allocation (OpenMP)\n"
-                      << "Usage: " << argv[0] << " [options]\n\n"
+                      << "Usage: " << argv[0] << " [N] [M] [seed] [mode]\n"
+                      << "   or: " << argv[0] << " [options]\n\n"
+                      << "Positional Arguments (equivalent to ./parking N M seed):\n"
+                      << "  N                  Vehicle count (default: 3500)\n"
+                      << "  M                  Parking slot count (default: 5000)\n"
+                      << "  seed               RNG seed for lot and request generation (default: 42)\n"
+                      << "  mode               Execution mode: 'serial', 'parallel', 'both', 'test' (default: both)\n\n"
                       << "Options:\n"
-                      << "  --floors <N>       Number of parking floors (default: 4)\n"
-                      << "  --rows <N>         Number of rows per floor (default: 25)\n"
-                      << "  --cols <N>         Number of columns per floor (default: 50)\n"
-                      << "  --vehicles <N>     Number of vehicle requests (default: 3500)\n"
-                      << "  --threads <N>      Number of OpenMP threads (default: max available)\n"
-                      << "  --mode <str>       Execution mode: 'serial', 'parallel', 'both', 'test' (default: both)\n"
+                      << "  -N, --vehicles <N> Number of vehicle requests (default: 3500)\n"
+                      << "  -M, --slots <M>    Number of parking slots (default: 5000)\n"
+                      << "  -s, --seed <N>     Random seed for reproducible generation (default: 42)\n"
+                      << "  -t, --threads <N>  Number of OpenMP threads (default: OMP_NUM_THREADS / hardware max)\n"
+                      << "  -m, --mode <str>   Execution mode: 'serial', 'parallel', 'both', 'test' (default: both)\n"
+                      << "  --floors <N>       Number of parking floors (overrides automatic slot factoring)\n"
+                      << "  --rows <N>         Number of rows per floor\n"
+                      << "  --cols <N>         Number of columns per floor\n"
                       << "  --benchmark        Run multi-thread scaling benchmark\n"
                       << "  --csv <path>       Save benchmark metrics to CSV file\n"
                       << "  --help, -h         Show this help screen\n";
@@ -766,7 +826,9 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    if (threads <= 0) {
+    if (threads > 0) {
+        omp_set_num_threads(threads);
+    } else {
         threads = omp_get_max_threads();
     }
 
@@ -774,25 +836,33 @@ int main(int argc, char* argv[]) {
         return runTestSuite();
     }
 
-    int total_slots = floors * rows * cols;
+    if (explicit_slots && !explicit_floors) {
+        factorSlots(total_slots, floors, rows, cols);
+    } else {
+        total_slots = floors * rows * cols;
+    }
 
     if (run_benchmark) {
         std::cout << "\n======================================================\n";
         std::cout << " OPENMP SCALING BENCHMARK SUITE\n";
         std::cout << " Problem Size: " << total_slots << " slots, " << vehicles << " vehicles\n";
         std::cout << " Available Cores/Threads: " << omp_get_max_threads() << "\n";
+        std::cout << " RNG Seed: " << seed << "\n";
         std::cout << "======================================================\n\n";
 
-        auto original_slots = generateParkingLot(floors, rows, cols, 42);
-        auto requests = generateRequests(vehicles, floors, cols, rows, 1337);
+        auto original_slots = generateParkingLot(floors, rows, cols, seed);
+        if (static_cast<int>(original_slots.size()) > total_slots) {
+            original_slots.resize(total_slots);
+        }
+        auto requests = generateRequests(vehicles, floors, cols, rows, seed + 1000);
 
         // 1. Measure Serial Baseline
         std::cout << "Running serial baseline... " << std::flush;
         auto s_slots = original_slots;
-        auto s_t0 = std::chrono::steady_clock::now();
+        double s_t0 = omp_get_wtime();
         auto s_res = allocateSerial(s_slots, requests, CostWeights());
-        auto s_t1 = std::chrono::steady_clock::now();
-        double serial_ms = std::chrono::duration<double, std::milli>(s_t1 - s_t0).count();
+        double s_t1 = omp_get_wtime();
+        double serial_ms = (s_t1 - s_t0) * 1000.0;
         auto s_val = validateAllocation(s_res, original_slots, requests);
         std::cout << "Done: " << std::fixed << std::setprecision(2) << serial_ms << " ms ("
                   << s_val.assigned_count << "/" << vehicles << " parked, "
@@ -818,10 +888,10 @@ int main(int argc, char* argv[]) {
 
         for (int t : thread_counts) {
             auto p_slots = original_slots;
-            auto p_t0 = std::chrono::steady_clock::now();
+            double p_t0 = omp_get_wtime();
             auto p_res = allocateParallel(p_slots, requests, t, CostWeights());
-            auto p_t1 = std::chrono::steady_clock::now();
-            double p_ms = std::chrono::duration<double, std::milli>(p_t1 - p_t0).count();
+            double p_t1 = omp_get_wtime();
+            double p_ms = (p_t1 - p_t0) * 1000.0;
 
             auto p_val = validateAllocation(p_res, original_slots, requests);
             double spd = (p_ms > 1e-6) ? (serial_ms / p_ms) : 0.0;
@@ -848,33 +918,35 @@ int main(int argc, char* argv[]) {
 
         // Write CSV if requested
         if (!csv_file.empty()) {
-            FILE* fp = std::fopen(csv_file.c_str(), "w");
-            if (!fp) {
-                for (int attempt = 0; attempt < 50; ++attempt) {
-                    #if defined(_WIN32)
-                    Sleep(100);
-                    #endif
-                    fp = std::fopen(csv_file.c_str(), "w");
-                    if (fp) {
-                        break;
-                    }
-                }
+            std::ofstream ofs(csv_file);
+            if (!ofs.is_open()) {
+                #if defined(_WIN32)
+                std::string cmd = "powershell -NoProfile -Command \"Remove-Item -Force '" + csv_file + "' -ErrorAction SilentlyContinue\"";
+                std::system(cmd.c_str());
+                #endif
+                ofs.clear();
+                ofs.open(csv_file);
             }
 
-            if (fp) {
-                std::fprintf(fp, "threads,slots,vehicles,serial_time_ms,parallel_time_ms,speedup,efficiency,is_valid\n");
+            if (ofs.is_open()) {
+                ofs << "threads,slots,vehicles,serial_time_ms,parallel_time_ms,speedup,efficiency,is_valid\n";
                 for (const auto& e : entries) {
-                    std::fprintf(fp, "%d,%d,%d,%.4f,%.4f,%.4f,%.4f,%d\n",
-                                 e.threads, e.slots, e.vehicles,
-                                 e.serial_time_ms, e.parallel_time_ms,
-                                 e.speedup, e.efficiency,
-                                 e.is_valid ? 1 : 0);
+                    ofs << e.threads << "," << e.slots << "," << e.vehicles << ","
+                        << std::fixed << std::setprecision(4)
+                        << e.serial_time_ms << "," << e.parallel_time_ms << ","
+                        << e.speedup << "," << e.efficiency << ","
+                        << (e.is_valid ? 1 : 0) << "\n";
                 }
-                std::fclose(fp);
+                ofs.close();
                 std::cout << "\n[INFO] Benchmark CSV successfully written to: " << csv_file << "\n";
             } else {
+                #if defined(_WIN32)
+                DWORD last_err = GetLastError();
+                #else
+                int last_err = 0;
+                #endif
                 std::cerr << "[ERROR] Could not open CSV file for writing: " << csv_file
-                          << " (errno: " << errno << ")\n";
+                          << " (errno: " << errno << ", GetLastError: " << last_err << ")\n";
             }
         }
 
@@ -885,18 +957,22 @@ int main(int argc, char* argv[]) {
     std::cout << "\n======================================================\n";
     std::cout << " SMART PARKING ALLOCATION SIMULATION\n";
     std::cout << " Slots: " << total_slots << " | Vehicles: " << vehicles
+              << " | Seed: " << seed
               << " | Threads: " << threads << " | Mode: " << mode << "\n";
     std::cout << "======================================================\n";
 
-    auto original_slots = generateParkingLot(floors, rows, cols, 42);
-    auto requests = generateRequests(vehicles, floors, cols, rows, 1337);
+    auto original_slots = generateParkingLot(floors, rows, cols, seed);
+    if (static_cast<int>(original_slots.size()) > total_slots) {
+        original_slots.resize(total_slots);
+    }
+    auto requests = generateRequests(vehicles, floors, cols, rows, seed + 1000);
 
     if (mode == "serial" || mode == "both") {
         auto slots_copy = original_slots;
-        auto t0 = std::chrono::steady_clock::now();
+        double t0 = omp_get_wtime();
         auto results = allocateSerial(slots_copy, requests, CostWeights());
-        auto t1 = std::chrono::steady_clock::now();
-        double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+        double t1 = omp_get_wtime();
+        double ms = (t1 - t0) * 1000.0;
 
         auto report = validateAllocation(results, original_slots, requests);
         printValidationReport("Serial Baseline", report);
@@ -905,10 +981,10 @@ int main(int argc, char* argv[]) {
 
     if (mode == "parallel" || mode == "both") {
         auto slots_copy = original_slots;
-        auto t0 = std::chrono::steady_clock::now();
+        double t0 = omp_get_wtime();
         auto results = allocateParallel(slots_copy, requests, threads, CostWeights());
-        auto t1 = std::chrono::steady_clock::now();
-        double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+        double t1 = omp_get_wtime();
+        double ms = (t1 - t0) * 1000.0;
 
         auto report = validateAllocation(results, original_slots, requests);
         printValidationReport("OpenMP Parallel (" + std::to_string(threads) + " threads)", report);
