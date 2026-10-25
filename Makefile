@@ -1,39 +1,38 @@
-# ==============================================================================
-# Makefile: Parallel Smart Parking Allocation System (OpenMP)
-# ==============================================================================
+CXX = g++
+CXXFLAGS = -std=c++17 -O3 -Wall -fopenmp
+LDFLAGS = -fopenmp
 
-CXX ?= clang++
-CXXFLAGS := -O2 -std=c++17 -Wall -Wextra
-UNAME_S := $(shell uname -s)
+TARGET = smart_parking.exe
+SRC_DIR = src
+SRCS = $(SRC_DIR)/generator.cpp \
+       $(SRC_DIR)/cost.cpp \
+       $(SRC_DIR)/validator.cpp \
+       $(SRC_DIR)/serial_alloc.cpp \
+       $(SRC_DIR)/parallel_alloc.cpp \
+       $(SRC_DIR)/main.cpp
 
-# Platform-specific OpenMP configuration
-ifeq ($(UNAME_S),Darwin)
-    # macOS with Homebrew libomp
-    BREW_LIBOMP := $(shell brew --prefix libomp 2>/dev/null || echo "/opt/homebrew/opt/libomp")
-    OMP_FLAGS := -Xpreprocessor -fopenmp -I$(BREW_LIBOMP)/include
-    OMP_LIBS  := -L$(BREW_LIBOMP)/lib -lomp
-else
-    # Linux / WSL / GCC
-    OMP_FLAGS := -fopenmp
-    OMP_LIBS  := -fopenmp
-endif
+OBJS = $(SRCS:.cpp=.o)
+HELLO_TARGET = hello_openmp.exe
 
-BIN_DIR := bin
-SRC_DIR := src
+.PHONY: all clean test benchmark hello
 
-.PHONY: all hello clean check-env
+all: $(TARGET)
 
-all: check-env $(BIN_DIR)/hello_openmp
+$(TARGET): $(OBJS)
+	$(CXX) $(OBJS) -o $(TARGET) $(LDFLAGS)
 
-check-env:
-	@mkdir -p $(BIN_DIR)
+%.o: %.cpp
+	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-$(BIN_DIR)/hello_openmp: $(SRC_DIR)/hello_openmp.cpp | check-env
-	$(CXX) $(CXXFLAGS) $(OMP_FLAGS) $< -o $@ $(OMP_LIBS)
+hello: $(SRC_DIR)/hello_openmp.cpp
+	$(CXX) $(CXXFLAGS) $< -o $(HELLO_TARGET) $(LDFLAGS)
+	./$(HELLO_TARGET)
 
-hello: $(BIN_DIR)/hello_openmp
-	@echo "Executing OpenMP smoke test..."
-	@./$(BIN_DIR)/hello_openmp
+test: $(TARGET)
+	./$(TARGET) --test
+
+benchmark: $(TARGET)
+	./$(TARGET) --benchmark --csv benchmark_results.csv
 
 clean:
-	rm -rf $(BIN_DIR)
+	-del /F /Q $(subst /,\,$(OBJS)) $(TARGET) $(HELLO_TARGET) benchmark_results.csv 2>NUL || rm -f $(OBJS) $(TARGET) $(HELLO_TARGET) benchmark_results.csv
