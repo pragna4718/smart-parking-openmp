@@ -127,7 +127,7 @@ for (int s = 0; s < total_slots; ++s) {
         const int num_active = static_cast<int>(active_req_indices.size());
 
         // Step 1: Parallel Proposal Phase
-        #pragma omp parallel for num_threads(threads_to_use) schedule(guided)
+       #pragma omp parallel for num_threads(threads_to_use) schedule(runtime)
         for (int idx = 0; idx < num_active; ++idx) {
             int r_i = active_req_indices[idx];
             const auto& req = requests[r_i];
