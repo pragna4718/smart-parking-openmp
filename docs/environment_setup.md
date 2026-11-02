@@ -7,42 +7,66 @@ This document records the hardware environment, compiler toolchain, runtime depe
 
 ## 2. Machine Hardware & Operating System Specifications
 
-The benchmarking and development platform for this project is an Apple Silicon workstation.
+## 2. Machine Hardware & Operating System Specifications
+
+The benchmarking and development platform is an Apple Silicon workstation.
 
 | System Specification Parameter | Measured System Value | Architectural Significance |
-| :--- | :--- | :--- |
-| **Workstation Model** | Mac15,12 | Apple Silicon SoC platform |
-| **Operating System** | macOS 26.5.2 (Darwin arm64) | 64-bit Unix environment |
-| **Processor (CPU)** | **Apple M3** | Heterogeneous ARMv8.5-A architecture |
-| **Physical Core Count** | **8 Cores** | 4 Performance (Firestorm/P) + 4 Efficiency (Icestorm/E) cores |
-| **Logical Thread Count** | **8 Concurrent Threads** | 1 thread per core (no hyper-threading) |
-| **Unified System Memory (RAM)** | **8.00 GB** ($8{,}589{,}934{,}592$ bytes) | Shared high-bandwidth LPDDR5 architecture |
-| **Memory Bus Width** | 128-bit | Unified memory accessible with low latency by CPU and cache |
-| **L1 / L2 Cache Architecture** | P-cores: 192KB L1 I-cache, 128KB L1 D-cache, 16MB shared L2<br>E-cores: 128KB L1 I-cache, 64KB L1 D-cache, 4MB shared L2 | Critical cache size guiding SoA vector layout |
+|---|---|---|
+| Workstation Model | MacBook Air (Mac16,12) | Apple Silicon platform |
+| Processor (CPU) | Apple M4 | ARM-based Apple Silicon architecture |
+| Total Core Count | 10 cores | 4 performance cores and 6 efficiency cores |
+| Memory (RAM) | 16 GB | Unified system memory |
+| Architecture | ARM64 | 64-bit Apple Silicon architecture |
+| Operating System | macOS | Unix-based development environment |
 
----
+## 3. Compiler & OpenMP Toolchain Setup
 
 ## 3. Compiler & OpenMP Toolchain Setup
 
 ### 3.1 Compiler Selection
-- **Default System Compiler**: Apple Clang version 21.0.0 (`clang-2100.1.1.101`).
-- **OpenMP Runtime Library**: LLVM `libomp` 23.1.4 (installed via Homebrew at `/opt/homebrew/opt/libomp`).
+
+- **Compiler:** Apple Clang 17.0.0
+- **Target Architecture:** ARM64 (Apple Silicon)
+- **OpenMP Runtime Library:** LLVM libomp installed through Homebrew.
+- **OpenMP Installation Path:** `/opt/homebrew/opt/libomp`
 
 ### 3.2 Compilation & Linker Flags
-Apple Clang requires delegating OpenMP pragma parsing to the preprocessor via `-Xpreprocessor` and linking against the LLVM OpenMP runtime library `-lomp`:
 
-| Flag | Parameter / Path | Purpose |
-| :--- | :--- | :--- |
-| **Language Standard** | `-std=c++17` | Enables structured bindings, `std::atomic` conveniences, and filesystem. |
-| **Optimization Level** | `-O2` | Identical optimization level used across serial and parallel builds for fair benchmarking. |
-| **Preprocessor Include** | `-Xpreprocessor -fopenmp -I/opt/homebrew/opt/libomp/include` | Directs Clang to parse OpenMP pragmas and load `omp.h`. |
-| **Linker Library** | `-L/opt/homebrew/opt/libomp/lib -lomp` | Links the LLVM OpenMP multi-threaded runtime engine. |
-| **Diagnostics** | `-Wall -Wextra` | Enforces rigorous code quality and safety warnings. |
+The project uses the C++17 standard and OpenMP for parallel execution.
 
-On Linux / GCC environments, the build system automatically switches to `-fopenmp` for both compilation and linking.
+The following command is used to compile the project:
 
----
+```bash
+g++ -std=c++17 -O3 -Wall \
+-Xpreprocessor -fopenmp \
+-I/opt/homebrew/opt/libomp/include \
+src/generator.cpp \
+src/cost.cpp \
+src/validator.cpp \
+src/serial_alloc.cpp \
+src/parallel_alloc.cpp \
+src/main.cpp \
+-L/opt/homebrew/opt/libomp/lib \
+-lomp \
+-o smart_parking
+```
 
+### 3.3 Explanation of Compilation Flags
+
+| Flag | Purpose |
+|---|---|
+| `-std=c++17` | Uses the C++17 language standard. |
+| `-O3` | Enables compiler optimizations for improved performance. |
+| `-Wall` | Enables common compiler warnings. |
+| `-Xpreprocessor -fopenmp` | Enables OpenMP pragma processing. |
+| `-I/opt/homebrew/opt/libomp/include` | Specifies the OpenMP header location. |
+| `-L/opt/homebrew/opt/libomp/lib` | Specifies the OpenMP library location. |
+| `-lomp` | Links the LLVM OpenMP runtime library. |
+
+The generated executable is named `smart_parking`.
+
+On macOS, the Homebrew LLVM OpenMP runtime is used to execute parallel regions.
 ## 4. Verification & Smoke Test
 
 The OpenMP runtime was verified using a multi-threaded test program (`src/hello_openmp.cpp`).

@@ -306,3 +306,63 @@ flowchart TD
    Any execution run with the same input seed and vehicle batch produces identical slot assignments regardless of thread scheduling order or thread count.
 3. **Deadlock Freedom**:
    Threads never perform nested cross-slot lock acquisitions; claims are updated per slot independently, eliminating Coffman circular wait conditions.
+
+---
+
+## 8. Actual Implementation and Optimization
+
+### 8.1 Parallel Allocation Strategy
+
+The Smart Parking Allocation system uses OpenMP to parallelize the vehicle-to-slot allocation process.
+
+The implementation uses the following mechanisms:
+
+1. **Parallel Proposal Generation:** Vehicle requests are processed concurrently using an OpenMP parallel-for loop.
+2. **Runtime Scheduling:** The proposal loop uses `schedule(runtime)`, allowing different scheduling policies to be selected through the `OMP_SCHEDULE` environment variable.
+3. **Conflict Management:** Per-slot OpenMP locks are used to protect shared parking-slot allocation state.
+4. **Parallel Assignment:** The assignment stage uses an OpenMP parallel-for loop with static scheduling and a reduction operation to count new assignments.
+
+### 8.2 Compatible-Slot Precomputation Optimization
+
+To reduce unnecessary compatibility checks, the implementation precomputes compatible parking slots for each vehicle type.
+
+- Separate compatible-slot lists are maintained for the five vehicle categories.
+- These lists are generated before the parallel allocation loop.
+- Each vehicle searches only the slots compatible with its type.
+- This reduces repeated compatibility checks during proposal generation.
+
+### 8.3 Scheduling Policies Evaluated
+
+The runtime-configurable proposal loop supports the following scheduling policies:
+
+- Static scheduling.
+- Dynamic scheduling with chunk sizes 16, 64 and 256.
+- Guided scheduling.
+
+These configurations were evaluated using repeated benchmark experiments.
+
+### 8.4 Synchronization and Correctness
+
+Per-slot locks protect shared slot allocation operations. The implementation is tested using the project's correctness test suite to verify that parking assignments do not result in duplicate slot allocation.
+
+The system also maintains the existing vehicle-slot compatibility and allocation rules.
+
+
+flowchart TD
+    A([Start]) --> B[Generate Parking Facility]
+    B --> C[Generate Vehicle Requests]
+    C --> D[Initialize Allocation System]
+    D --> E[Precompute Compatible Slots]
+    E --> F[Parallel Proposal Generation]
+    F --> G[Evaluate Slot Cost]
+    G --> H[Select Best Compatible Slot]
+    H --> I[Resolve Allocation Conflicts]
+    I --> J[Per-Slot OpenMP Locks]
+    J --> K[Commit Vehicle Assignments]
+    K --> L[Update Assignment Count]
+    L --> M{More Vehicles to Allocate?}
+    M -->|Yes| F
+    M -->|No| N[Validate Allocation]
+    N --> O[Calculate Performance Metrics]
+    O --> P[Generate CSV Results and Graphs]
+    P --> Q([End])
