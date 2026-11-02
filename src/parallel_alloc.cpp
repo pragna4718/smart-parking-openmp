@@ -92,6 +92,18 @@ std::vector<AllocationResult> allocateParallel(
 
     // Initialize fine-grained OpenMP locks with RAII cleanup
     OpenMPLockArray slot_locks(total_slots);
+    // Precompute compatible parking slots for each vehicle type
+std::vector<std::vector<int>> compatible_slots_by_type(5);
+
+for (int s = 0; s < total_slots; ++s) {
+    for (int type = 0; type < 5; ++type) {
+        VehicleType vehicle_type = static_cast<VehicleType>(type);
+
+        if (isCompatible(vehicle_type, slots[s].type)) {
+            compatible_slots_by_type[type].push_back(s);
+        }
+    }
+}
 
     // Active unassigned request indices
     std::vector<int> active_req_indices(total_requests);
@@ -123,13 +135,15 @@ std::vector<AllocationResult> allocateParallel(
             int best_slot_idx = -1;
             double min_cost = COST_INFINITY;
 
-            // Search across all available slots
-            for (int s = 0; s < total_slots; ++s) {
-                if (slots[s].is_occupied) {
-                    continue;
-                }
+            // Search only slots compatible with this vehicle type
+int vehicle_type_index = static_cast<int>(req.type);
 
-                double cost = computeSlotCost(req, slots[s], weights);
+for (int s : compatible_slots_by_type[vehicle_type_index]) {
+    if (slots[s].is_occupied) {
+        continue;
+    }
+
+    double cost = computeSlotCost(req, slots[s], weights);
                 if (cost < min_cost - COST_EPSILON) {
                     min_cost = cost;
                     best_slot_idx = s;
