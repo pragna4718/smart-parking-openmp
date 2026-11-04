@@ -49,7 +49,8 @@ std::vector<AllocationResult> allocateParallel(
     std::vector<ParkingSlot>& slots,
     const std::vector<VehicleRequest>& requests,
     int num_threads,
-    const CostWeights& weights
+    const CostWeights& weights,
+    bool use_precomputation
 ) {
     // Validate uniqueness of input vehicle IDs
     std::unordered_set<int> seen_req_ids;
@@ -92,24 +93,32 @@ std::vector<AllocationResult> allocateParallel(
 
     // Initialize fine-grained OpenMP locks with RAII cleanup
     OpenMPLockArray slot_locks(total_slots);
-    // Precompute compatible parking slots for each vehicle type
-std::vector<std::vector<int>> compatible_slots_by_type(5);
 
-for (int s = 0; s < total_slots; ++s) {
-    for (int type = 0; type < 5; ++type) {
-        VehicleType vehicle_type = static_cast<VehicleType>(type);
-
-        if (isCompatible(vehicle_type, slots[s].type)) {
-            compatible_slots_by_type[type].push_back(s);
+    // Precompute compatible parking slots for each vehicle type if enabled
+    std::vector<std::vector<int>> compatible_slots_by_type;
+    if (use_precomputation) {
+        compatible_slots_by_type.resize(5);
+        for (int s = 0; s < total_slots; ++s) {
+            for (int type = 0; type < 5; ++type) {
+                VehicleType vehicle_type = static_cast<VehicleType>(type);
+                if (isCompatible(vehicle_type, slots[s].type)) {
+                    compatible_slots_by_type[type].push_back(s);
+                }
+            }
         }
     }
-}
 
     // Active unassigned request indices
     std::vector<int> active_req_indices(total_requests);
     for (int i = 0; i < total_requests; ++i) {
         active_req_indices[i] = i;
     }
+
+    // Pre-allocated scratch buffers to eliminate heap churn in multi-round loops
+    std::vector<SlotBid> slot_bids(total_slots, {-1, -1, COST_INFINITY, -1});
+    std::vector<uint8_t> vehicle_found_slot(total_requests, 0);
+    std::vector<int> next_active;
+    next_active.reserve(total_requests);
 
     // Multi-Round Greedy Proposal Algorithm:
     // In each round:
@@ -120,14 +129,10 @@ for (int s = 0; s < total_slots; ++s) {
     // 4. Vehicles finding no compatible candidate slots in a round are pruned.
     // 5. Continues until no unassigned vehicles remain or no new assignments can be made.
     while (!active_req_indices.empty()) {
-        // Track proposals for each slot in this round
-        std::vector<SlotBid> slot_bids(total_slots, {-1, -1, COST_INFINITY, -1});
-        std::vector<uint8_t> vehicle_found_slot(total_requests, 0);
-
         const int num_active = static_cast<int>(active_req_indices.size());
 
         // Step 1: Parallel Proposal Phase
-       #pragma omp parallel for num_threads(threads_to_use) schedule(runtime)
+        #pragma omp parallel for num_threads(threads_to_use) schedule(runtime)
         for (int idx = 0; idx < num_active; ++idx) {
             int r_i = active_req_indices[idx];
             const auto& req = requests[r_i];
@@ -135,22 +140,39 @@ for (int s = 0; s < total_slots; ++s) {
             int best_slot_idx = -1;
             double min_cost = COST_INFINITY;
 
-            // Search only slots compatible with this vehicle type
-int vehicle_type_index = static_cast<int>(req.type);
+            if (use_precomputation) {
+                int vehicle_type_index = static_cast<int>(req.type);
+                for (int s : compatible_slots_by_type[vehicle_type_index]) {
+                    if (slots[s].is_occupied) {
+                        continue;
+                    }
 
-for (int s : compatible_slots_by_type[vehicle_type_index]) {
-    if (slots[s].is_occupied) {
-        continue;
-    }
-
-    double cost = computeSlotCost(req, slots[s], weights);
-                if (cost < min_cost - COST_EPSILON) {
-                    min_cost = cost;
-                    best_slot_idx = s;
-                } else if (std::fabs(cost - min_cost) <= COST_EPSILON) {
-                    if (best_slot_idx == -1 || isPreferredCandidateSlot(req, slots[s], slots[best_slot_idx])) {
+                    double cost = computeSlotCost(req, slots[s], weights);
+                    if (cost < min_cost - COST_EPSILON) {
                         min_cost = cost;
                         best_slot_idx = s;
+                    } else if (std::fabs(cost - min_cost) <= COST_EPSILON) {
+                        if (best_slot_idx == -1 || isPreferredCandidateSlot(req, slots[s], slots[best_slot_idx])) {
+                            min_cost = cost;
+                            best_slot_idx = s;
+                        }
+                    }
+                }
+            } else {
+                for (int s = 0; s < total_slots; ++s) {
+                    if (slots[s].is_occupied) {
+                        continue;
+                    }
+
+                    double cost = computeSlotCost(req, slots[s], weights);
+                    if (cost < min_cost - COST_EPSILON) {
+                        min_cost = cost;
+                        best_slot_idx = s;
+                    } else if (std::fabs(cost - min_cost) <= COST_EPSILON) {
+                        if (best_slot_idx == -1 || isPreferredCandidateSlot(req, slots[s], slots[best_slot_idx])) {
+                            min_cost = cost;
+                            best_slot_idx = s;
+                        }
                     }
                 }
             }
@@ -200,6 +222,8 @@ for (int s : compatible_slots_by_type[vehicle_type_index]) {
                 results[win_idx].cost = slot_bids[s].cost;
                 results[win_idx].success = true;
                 new_assignments++;
+                // Reset slot bid in place
+                slot_bids[s] = {-1, -1, COST_INFINITY, -1};
             }
         }
 
@@ -208,21 +232,20 @@ for (int s : compatible_slots_by_type[vehicle_type_index]) {
             break;
         }
 
-        // Step 3: Filter unassigned requests for the next round.
-        // Keep requests that are not assigned AND found at least one candidate slot this round.
-        std::vector<int> next_active;
-        next_active.reserve(active_req_indices.size() - new_assignments);
+        // Step 3: Filter unassigned requests for the next round and reset flags
+        next_active.clear();
         for (int r_i : active_req_indices) {
             if (!results[r_i].success && vehicle_found_slot[r_i]) {
                 next_active.push_back(r_i);
             }
+            vehicle_found_slot[r_i] = 0;
         }
 
         if (next_active.empty()) {
             break;
         }
 
-        active_req_indices = std::move(next_active);
+        active_req_indices = next_active;
     }
 
     return results;

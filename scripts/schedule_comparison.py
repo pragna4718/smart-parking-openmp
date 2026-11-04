@@ -1,15 +1,14 @@
-
 import subprocess
 import csv
-import re
 import statistics
+import os
 from pathlib import Path
+from utils import get_executable, parse_benchmark_output
 
 ROOT = Path(__file__).resolve().parent.parent
 RESULTS = ROOT / "results"
-BINARY = ROOT / "smart_parking"
+BINARY = get_executable(ROOT)
 
-THREADS = [1, 2, 4, 8, 10]
 REPEATS = 5
 VEHICLES = 8000
 
@@ -22,8 +21,11 @@ SCHEDULES = [
 ]
 
 def run_one(schedule):
-    env = __import__("os").environ.copy()
+    env = os.environ.copy()
     env["OMP_SCHEDULE"] = schedule
+
+    temp_csv = RESULTS / "schedule_temp.csv"
+    temp_csv.parent.mkdir(parents=True, exist_ok=True)
 
     command = [
         str(BINARY),
@@ -32,7 +34,7 @@ def run_one(schedule):
         "--cols", "50",
         "--vehicles", str(VEHICLES),
         "--benchmark",
-        "--csv", str(RESULTS / "schedule_temp.csv")
+        "--csv", str(temp_csv)
     ]
 
     result = subprocess.run(
@@ -43,100 +45,81 @@ def run_one(schedule):
         env=env
     )
 
-    output = result.stdout
-
-    serial_match = re.search(
-        r"Done:\s*([\d.]+)\s*ms", output
-    )
-    if not serial_match:
-        raise RuntimeError("Serial timing not found")
-
-    serial = float(serial_match.group(1))
-    parallel = {}
-
-    for thread in THREADS:
-        pattern = rf"^\s*{thread}\s+\d+/\d+\s+([\d.]+)\s+"
-        match = re.search(pattern, output, re.MULTILINE)
-
-        if not match:
-            raise RuntimeError(
-                f"Missing timing for {thread} threads"
-            )
-
-        parallel[thread] = float(match.group(1))
-
-    return serial, parallel
-
+    return parse_benchmark_output(result.stdout)
 
 def main():
-    RESULTS.mkdir(exist_ok=True)
-
+    RESULTS.mkdir(parents=True, exist_ok=True)
     output_file = RESULTS / "schedule_comparison.csv"
     rows = []
+    detected_threads = []
+
+    print(f"Starting schedule comparison benchmark using: {BINARY}")
 
     for name, schedule in SCHEDULES:
-        print(f"\nTesting {name}...")
+        print(f"\nTesting schedule: {name} (OMP_SCHEDULE={schedule})...")
 
         serial_times = []
-        parallel_times = {t: [] for t in THREADS}
+        parallel_times = {}
 
         for run in range(REPEATS + 1):
-            print(f"Run {run + 1}/{REPEATS + 1}")
+            print(f"  Run {run + 1}/{REPEATS + 1}")
 
             serial, parallel = run_one(schedule)
+
+            if not detected_threads:
+                detected_threads = sorted(list(parallel.keys()))
+
+            if not parallel_times:
+                parallel_times = {t: [] for t in detected_threads}
 
             # First run is warm-up
             if run == 0:
                 continue
 
             serial_times.append(serial)
-
-            for thread in THREADS:
-                parallel_times[thread].append(
-                    parallel[thread]
-                )
+            for thread in detected_threads:
+                parallel_times[thread].append(parallel[thread])
 
         serial_avg = statistics.mean(serial_times)
 
-        for thread in THREADS:
-            parallel_avg = statistics.mean(
-                parallel_times[thread]
-            )
+        for thread in detected_threads:
+            parallel_avg = statistics.mean(parallel_times[thread])
+            speedup = serial_avg / parallel_avg if parallel_avg > 1e-6 else 0.0
+            efficiency = speedup / thread if thread > 0 else 0.0
 
-            speedup = serial_avg / parallel_avg
-            efficiency = speedup / thread
+            rows.append({
+                "schedule": name,
+                "omp_schedule": schedule,
+                "threads": thread,
+                "slots": 10000,
+                "vehicles": VEHICLES,
+                "serial_avg_ms": round(serial_avg, 3),
+                "parallel_avg_ms": round(parallel_avg, 3),
+                "speedup": round(speedup, 4),
+                "efficiency": round(efficiency, 4),
+                "repeats": REPEATS
+            })
 
-            rows.append([
-                name,
-                schedule,
-                thread,
-                10000,
-                VEHICLES,
-                round(serial_avg, 4),
-                round(parallel_avg, 4),
-                round(speedup, 4),
-                round(efficiency, 4),
-                REPEATS
-            ])
-
-            print(
-                f"{thread} threads: "
-                f"{parallel_avg:.2f} ms, "
-                f"speedup {speedup:.2f}x"
-            )
-
-    with open(output_file, "w", newline="") as file:
-        writer = csv.writer(file)
-        writer.writerow([
-            "schedule", "omp_schedule", "threads",
-            "slots", "vehicles", "serial_avg_ms",
-            "parallel_avg_ms", "speedup",
-            "efficiency", "repeats"
-        ])
+    with open(output_file, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=[
+                "schedule",
+                "omp_schedule",
+                "threads",
+                "slots",
+                "vehicles",
+                "serial_avg_ms",
+                "parallel_avg_ms",
+                "speedup",
+                "efficiency",
+                "repeats"
+            ]
+        )
+        writer.writeheader()
         writer.writerows(rows)
 
-    print(f"\nAll results saved to {output_file}")
-
+    print(f"\n[SUCCESS] Schedule comparison saved to: {output_file}")
 
 if __name__ == "__main__":
     main()

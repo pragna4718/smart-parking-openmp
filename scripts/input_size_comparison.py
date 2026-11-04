@@ -1,16 +1,14 @@
-
 import subprocess
 import csv
-import re
 import statistics
 import os
 from pathlib import Path
+from utils import get_executable, parse_benchmark_output
 
 ROOT = Path(__file__).resolve().parent.parent
 RESULTS = ROOT / "results"
-BINARY = ROOT / "smart_parking"
+BINARY = get_executable(ROOT)
 
-THREADS = [1, 2, 4, 8, 10]
 REPEATS = 5
 
 EXPERIMENTS = [
@@ -32,10 +30,12 @@ EXPERIMENTS = [
     }
 ]
 
-
 def run_benchmark(experiment):
     env = os.environ.copy()
     env["OMP_SCHEDULE"] = "guided"
+
+    temp_csv = RESULTS / "input_size_temp.csv"
+    temp_csv.parent.mkdir(parents=True, exist_ok=True)
 
     command = [
         str(BINARY),
@@ -44,7 +44,7 @@ def run_benchmark(experiment):
         "--cols", str(experiment["cols"]),
         "--vehicles", str(experiment["vehicles"]),
         "--benchmark",
-        "--csv", str(RESULTS / "input_size_temp.csv")
+        "--csv", str(temp_csv)
     ]
 
     result = subprocess.run(
@@ -55,96 +55,79 @@ def run_benchmark(experiment):
         env=env
     )
 
-    output = result.stdout
-
-    serial_match = re.search(
-        r"Done:\s*([\d.]+)\s*ms", output
-    )
-
-    if not serial_match:
-        raise RuntimeError("Serial timing not found")
-
-    serial = float(serial_match.group(1))
-    parallel = {}
-
-    for thread in THREADS:
-        pattern = rf"^\s*{thread}\s+\d+/\d+\s+([\d.]+)\s+"
-        match = re.search(pattern, output, re.MULTILINE)
-
-        if not match:
-            raise RuntimeError(
-                f"Timing not found for {thread} threads"
-            )
-
-        parallel[thread] = float(match.group(1))
-
-    return serial, parallel
-
+    return parse_benchmark_output(result.stdout)
 
 def main():
-    RESULTS.mkdir(exist_ok=True)
+    RESULTS.mkdir(parents=True, exist_ok=True)
+    output_file = RESULTS / "input_size_comparison.csv"
     rows = []
+    detected_threads = []
 
-    for experiment in EXPERIMENTS:
-        print(f"\nTesting {experiment['name']} workload")
+    print(f"Starting input size comparison using: {BINARY}")
+
+    for exp in EXPERIMENTS:
+        name = exp["name"]
+        print(f"\nTesting workload: {name} ({exp['vehicles']} vehicles, {exp['slots']} slots)...")
+
         serial_times = []
-        parallel_times = {t: [] for t in THREADS}
+        parallel_times = {}
 
         for run in range(REPEATS + 1):
-            print(f"Run {run + 1}/{REPEATS + 1}")
+            print(f"  Run {run + 1}/{REPEATS + 1}")
 
-            serial, parallel = run_benchmark(experiment)
+            serial, parallel = run_benchmark(exp)
+
+            if not detected_threads:
+                detected_threads = sorted(list(parallel.keys()))
+
+            if not parallel_times:
+                parallel_times = {t: [] for t in detected_threads}
 
             if run == 0:
                 continue
 
             serial_times.append(serial)
-
-            for thread in THREADS:
-                parallel_times[thread].append(
-                    parallel[thread]
-                )
+            for thread in detected_threads:
+                parallel_times[thread].append(parallel[thread])
 
         serial_avg = statistics.mean(serial_times)
 
-        for thread in THREADS:
-            parallel_avg = statistics.mean(
-                parallel_times[thread]
-            )
+        for thread in detected_threads:
+            parallel_avg = statistics.mean(parallel_times[thread])
+            speedup = serial_avg / parallel_avg if parallel_avg > 1e-6 else 0.0
+            efficiency = speedup / thread if thread > 0 else 0.0
 
-            speedup = serial_avg / parallel_avg
-            efficiency = speedup / thread
+            rows.append({
+                "workload": name,
+                "slots": exp["slots"],
+                "vehicles": exp["vehicles"],
+                "threads": thread,
+                "serial_avg_ms": round(serial_avg, 3),
+                "parallel_avg_ms": round(parallel_avg, 3),
+                "speedup": round(speedup, 4),
+                "efficiency": round(efficiency, 4),
+                "repeats": REPEATS
+            })
 
-            rows.append([
-                experiment["name"],
-                experiment["slots"],
-                experiment["vehicles"],
-                thread,
-                round(serial_avg, 4),
-                round(parallel_avg, 4),
-                round(speedup, 4),
-                round(efficiency, 4),
-                REPEATS
-            ])
-
-            print(
-                f"{thread} threads: {parallel_avg:.2f} ms, "
-                f"speedup {speedup:.2f}x"
-            )
-
-    output_file = RESULTS / "input_size_comparison.csv"
-
-    with open(output_file, "w", newline="") as file:
-        writer = csv.writer(file)
-        writer.writerow([
-            "workload", "slots", "vehicles", "threads",
-            "serial_avg_ms", "parallel_avg_ms",
-            "speedup", "efficiency", "repeats"
-        ])
+    with open(output_file, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=[
+                "workload",
+                "slots",
+                "vehicles",
+                "threads",
+                "serial_avg_ms",
+                "parallel_avg_ms",
+                "speedup",
+                "efficiency",
+                "repeats"
+            ]
+        )
+        writer.writeheader()
         writer.writerows(rows)
 
-    print(f"\nResults saved to: {output_file}")
-
+    print(f"\n[SUCCESS] Input size comparison saved to: {output_file}")
 
 if __name__ == "__main__":
     main()

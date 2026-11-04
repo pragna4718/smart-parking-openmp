@@ -1,14 +1,12 @@
-
 import subprocess
 import csv
-import re
 import statistics
+import os
 from pathlib import Path
+from utils import get_executable, parse_benchmark_output
 
 # Benchmark configuration
-THREADS = [1, 2, 4, 8, 10]
 REPEATS = 5
-
 SLOTS = 10000
 VEHICLES = 8000
 
@@ -17,21 +15,27 @@ OUTPUT = ROOT / "results" / "repeated_benchmark_results.csv"
 
 def run_benchmark():
     serial_times = []
-    parallel_times = {t: [] for t in THREADS}
+    parallel_times = {}
+    detected_threads = []
 
     print("Starting repeated benchmark...")
-    
+    executable = get_executable(ROOT)
+    print(f"Using binary: {executable}")
+
     for run in range(REPEATS + 1):
         print(f"\nRun {run + 1}/{REPEATS + 1}")
 
+        temp_csv = ROOT / "results" / "temp.csv"
+        temp_csv.parent.mkdir(parents=True, exist_ok=True)
+
         command = [
-            str(ROOT / "smart_parking"),
+            executable,
             "--floors", "5",
             "--rows", "40",
             "--cols", "50",
             "--vehicles", str(VEHICLES),
             "--benchmark",
-            "--csv", str(ROOT / "results" / "temp.csv")
+            "--csv", str(temp_csv)
         ]
 
         result = subprocess.run(
@@ -41,48 +45,25 @@ def run_benchmark():
             check=True
         )
 
-        output = result.stdout
+        serial_time, measured = parse_benchmark_output(result.stdout)
 
-        serial_match = re.search(
-            r"Done:\s*([\d.]+)\s*ms",
-            output
-        )
-
-        if not serial_match:
-            raise RuntimeError("Serial time not found in output")
-
-        serial_time = float(serial_match.group(1))
-
-        measured = {}
-
-        for thread in THREADS:
-            pattern = (
-                rf"^\s*{thread}\s+\d+/\d+\s+"
-                rf"([\d.]+)\s+"
-            )
-            match = re.search(pattern, output, re.MULTILINE)
-
-            if not match:
-                raise RuntimeError(
-                    f"Result for {thread} threads not found"
-                )
-
-            measured[thread] = float(match.group(1))
+        if not detected_threads:
+            detected_threads = sorted(list(measured.keys()))
+            parallel_times = {t: [] for t in detected_threads}
 
         # First run is a warm-up and is discarded
         if run == 0:
+            print("  (Warm-up run discarded)")
             continue
 
         serial_times.append(serial_time)
-
-        for thread in THREADS:
+        for thread in detected_threads:
             parallel_times[thread].append(measured[thread])
 
-    OUTPUT.parent.mkdir(exist_ok=True)
+    OUTPUT.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(OUTPUT, "w", newline="") as file:
+    with open(OUTPUT, "w", newline="", encoding="utf-8") as file:
         writer = csv.writer(file)
-
         writer.writerow([
             "threads",
             "slots",
@@ -96,32 +77,23 @@ def run_benchmark():
 
         serial_avg = statistics.mean(serial_times)
 
-        for thread in THREADS:
-            parallel_avg = statistics.mean(
-                parallel_times[thread]
-            )
-
-            speedup = serial_avg / parallel_avg
-            efficiency = speedup / thread
+        for thread in detected_threads:
+            parallel_avg = statistics.mean(parallel_times[thread])
+            speedup = serial_avg / parallel_avg if parallel_avg > 1e-6 else 0.0
+            efficiency = speedup / thread if thread > 0 else 0.0
 
             writer.writerow([
                 thread,
                 SLOTS,
                 VEHICLES,
-                round(serial_avg, 4),
-                round(parallel_avg, 4),
+                round(serial_avg, 3),
+                round(parallel_avg, 3),
                 round(speedup, 4),
                 round(efficiency, 4),
                 REPEATS
             ])
 
-            print(
-                f"{thread} threads: "
-                f"{parallel_avg:.3f} ms, "
-                f"speedup {speedup:.2f}x"
-            )
-
-    print(f"\nResults saved to: {OUTPUT}")
+    print(f"\n[SUCCESS] Benchmark results saved to: {OUTPUT}")
 
 if __name__ == "__main__":
     run_benchmark()

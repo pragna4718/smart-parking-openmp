@@ -352,7 +352,7 @@ bool testRepeatedThreadCounts() {
 
     for (int t : {1, 2, 4, 8}) {
         auto p_slots = original_slots;
-        auto p_res = allocateParallel(p_slots, requests, t, CostWeights());
+        auto p_res = allocateParallel(p_slots, requests, t, CostWeights(), true);
         auto p_val = validateAllocation(p_res, original_slots, requests);
         if (!p_val.is_valid || p_val.duplicate_count > 0 || p_val.incompatible_count > 0) {
             return false;
@@ -565,6 +565,94 @@ bool testCandidateSlotTieBreakingPreservesAccessibleSlot() {
            p_res[0].slot_id == 1 && p_res[1].slot_id == 0;
 }
 
+
+bool testNoFreeCompatibleSlotLeftForUnassignedVehicles() {
+    auto slots = generateParkingLot(2, 5, 10, 42); // 100 slots
+    auto requests = generateRequests(150, 2, 10, 5, 1337); // 150 requests (oversubscription)
+    auto p_slots = slots;
+    auto p_res = allocateParallel(p_slots, requests, 4, CostWeights(), true);
+    auto p_val = validateAllocation(p_res, slots, requests);
+    if (!p_val.is_valid) return false;
+
+    // Verify invariant: No unassigned vehicle has any unoccupied compatible slot remaining
+    for (const auto& res : p_res) {
+        if (!res.success) {
+            const auto& req = requests[res.vehicle_id];
+            for (const auto& slot : p_slots) {
+                if (!slot.is_occupied && isCompatible(req.type, slot.type)) {
+                    return false;
+                }
+            }
+        }
+    }
+    return true;
+}
+
+bool testRepeatedConcurrencyStress50Runs() {
+    for (int rep = 0; rep < 50; ++rep) {
+        auto slots = generateParkingLot(2, 5, 10, 100 + rep);
+        auto requests = generateRequests(120, 2, 10, 5, 200 + rep);
+        auto p_slots = slots;
+        auto p_res = allocateParallel(p_slots, requests, 8, CostWeights(), true);
+        auto p_val = validateAllocation(p_res, slots, requests);
+        if (!p_val.is_valid || p_val.duplicate_count > 0 || p_val.incompatible_count > 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool testExtremeWorkloadRatios() {
+    // Extreme oversubscription: 20 slots, 300 requests
+    auto slots1 = generateParkingLot(1, 2, 10, 42);
+    auto reqs1 = generateRequests(300, 1, 10, 2, 42);
+    auto p_slots1 = slots1;
+    auto p_res1 = allocateParallel(p_slots1, reqs1, 4, CostWeights(), true);
+    auto val1 = validateAllocation(p_res1, slots1, reqs1);
+    if (!val1.is_valid || val1.assigned_count > 20 || val1.duplicate_count > 0) return false;
+
+    // Extreme undersubscription: 1000 slots, 5 requests
+    auto slots2 = generateParkingLot(4, 10, 25, 42);
+    auto reqs2 = generateRequests(5, 4, 25, 10, 42);
+    auto p_slots2 = slots2;
+    auto p_res2 = allocateParallel(p_slots2, reqs2, 4, CostWeights(), true);
+    auto val2 = validateAllocation(p_res2, slots2, reqs2);
+    if (!val2.is_valid || val2.assigned_count != 5 || val2.duplicate_count > 0) return false;
+
+    return true;
+}
+
+bool testOptimizationEquivalence() {
+    auto slots = generateParkingLot(3, 10, 20, 77); // 600 slots
+    auto reqs = generateRequests(500, 3, 20, 10, 88); // 500 reqs
+
+    auto slots_unopt = slots;
+    auto res_unopt = allocateParallel(slots_unopt, reqs, 4, CostWeights(), false);
+    auto val_unopt = validateAllocation(res_unopt, slots, reqs);
+
+    auto slots_opt = slots;
+    auto res_opt = allocateParallel(slots_opt, reqs, 4, CostWeights(), true);
+    auto val_opt = validateAllocation(res_opt, slots, reqs);
+
+    if (!val_unopt.is_valid || !val_opt.is_valid) return false;
+    if (val_unopt.duplicate_count != 0 || val_opt.duplicate_count != 0) return false;
+    if (val_unopt.assigned_count != val_opt.assigned_count) return false;
+    return true;
+}
+
+bool testDimensionValidation() {
+    auto slots = generateParkingLot(1, 5, 5, 42);
+    std::vector<VehicleRequest> reqs;
+    auto p_res = allocateParallel(slots, reqs, 0, CostWeights(), true);
+    if (!p_res.empty()) return false;
+
+    auto reqs2 = generateRequests(10, 1, 5, 5, 42);
+    auto slots2 = slots;
+    auto p_res2 = allocateParallel(slots2, reqs2, -5, CostWeights(), true);
+    auto val2 = validateAllocation(p_res2, slots, reqs2);
+    return val2.is_valid;
+}
+
 bool runScenario(const std::string& name, int floors, int rows, int cols, int vehicles, int threads) {
     std::cout << "\n======================================================\n";
     std::cout << " RUNNING SCENARIO: " << name << "\n";
@@ -669,7 +757,12 @@ int runTestSuite() {
         {"High-Contention Stress Scenario", testHighContention},
         {"Validator Deliberate Error Detection", testValidatorDeliberateErrors},
         {"Candidate Slot Tie-Breaking Preserves Large Slot", testCandidateSlotTieBreakingPreservesLargeSlot},
-        {"Candidate Slot Tie-Breaking Preserves Accessible Slot", testCandidateSlotTieBreakingPreservesAccessibleSlot}
+        {"Candidate Slot Tie-Breaking Preserves Accessible Slot", testCandidateSlotTieBreakingPreservesAccessibleSlot},
+        {"No Free Compatible Slot Left For Unassigned", testNoFreeCompatibleSlotLeftForUnassignedVehicles},
+        {"Repeated Concurrency Stress 50 Runs", testRepeatedConcurrencyStress50Runs},
+        {"Extreme Workload Ratios (High Oversub and Undersub)", testExtremeWorkloadRatios},
+        {"Optimization Equivalence Invariant Check", testOptimizationEquivalence},
+        {"Dimension and Thread Clamping Validation", testDimensionValidation}
     };
 
     bool all_passed = true;
@@ -755,6 +848,8 @@ int main(int argc, char* argv[]) {
     bool run_benchmark = false;
     bool explicit_floors = false;
     bool explicit_slots = false;
+    bool use_precomputation = true;
+    std::vector<int> custom_threads;
 
     // Support positional arguments: ./smart_parking.exe [N] [M] [seed] [mode]
     int pos_idx = 1;
@@ -799,6 +894,19 @@ int main(int argc, char* argv[]) {
             csv_file = argv[++i];
         } else if (arg == "--benchmark") {
             run_benchmark = true;
+        } else if (arg == "--no-precompute" || arg == "--unoptimized") {
+            use_precomputation = false;
+        } else if (arg == "--precompute" && i + 1 < argc) {
+            std::string val = argv[++i];
+            use_precomputation = (val == "1" || val == "true" || val == "yes");
+        } else if (arg == "--threads-list" && i + 1 < argc) {
+            std::string tlist = argv[++i];
+            std::stringstream ss(tlist);
+            std::string item;
+            custom_threads.clear();
+            while (std::getline(ss, item, ',')) {
+                if (!item.empty()) custom_threads.push_back(std::atoi(item.c_str()));
+            }
         } else if (arg == "--test") {
             mode = "test";
         } else if (arg == "--help" || arg == "-h") {
@@ -857,22 +965,35 @@ int main(int argc, char* argv[]) {
         auto requests = generateRequests(vehicles, floors, cols, rows, seed + 1000);
 
         // 1. Measure Serial Baseline
+        int bench_reps = (vehicles <= 50) ? 200 : (vehicles <= 250) ? 50 : (vehicles <= 1000) ? 10 : 1;
         std::cout << "Running serial baseline... " << std::flush;
+        std::vector<AllocationResult> s_res;
         auto s_slots = original_slots;
         double s_t0 = omp_get_wtime();
-        auto s_res = allocateSerial(s_slots, requests, CostWeights());
+        for (int rep = 0; rep < bench_reps; ++rep) {
+            s_slots = original_slots;
+            s_res = allocateSerial(s_slots, requests, CostWeights());
+        }
         double s_t1 = omp_get_wtime();
-        double serial_ms = (s_t1 - s_t0) * 1000.0;
+        double serial_ms = ((s_t1 - s_t0) * 1000.0) / bench_reps;
         auto s_val = validateAllocation(s_res, original_slots, requests);
         std::cout << "Done: " << std::fixed << std::setprecision(2) << serial_ms << " ms ("
                   << s_val.assigned_count << "/" << vehicles << " parked, "
                   << (s_val.is_valid ? "Valid" : "INVALID") << ")\n\n";
 
         // 2. Thread count sweep
-        std::vector<int> thread_counts = {1, 2, 4, 8};
-        int max_t = omp_get_max_threads();
-        if (std::find(thread_counts.begin(), thread_counts.end(), max_t) == thread_counts.end()) {
-            thread_counts.push_back(max_t);
+        std::vector<int> thread_counts;
+        if (!custom_threads.empty()) {
+            thread_counts = custom_threads;
+        } else {
+            thread_counts = {1, 2, 4, 8};
+            int max_t = omp_get_max_threads();
+            if (max_t >= 10 && std::find(thread_counts.begin(), thread_counts.end(), 10) == thread_counts.end()) {
+                thread_counts.push_back(10);
+            }
+            if (std::find(thread_counts.begin(), thread_counts.end(), max_t) == thread_counts.end()) {
+                thread_counts.push_back(max_t);
+            }
         }
         std::sort(thread_counts.begin(), thread_counts.end());
 
@@ -887,11 +1008,15 @@ int main(int argc, char* argv[]) {
         std::cout << std::string(74, '-') << "\n";
 
         for (int t : thread_counts) {
+            std::vector<AllocationResult> p_res;
             auto p_slots = original_slots;
             double p_t0 = omp_get_wtime();
-            auto p_res = allocateParallel(p_slots, requests, t, CostWeights());
+            for (int rep = 0; rep < bench_reps; ++rep) {
+                p_slots = original_slots;
+                p_res = allocateParallel(p_slots, requests, t, CostWeights(), use_precomputation);
+            }
             double p_t1 = omp_get_wtime();
-            double p_ms = (p_t1 - p_t0) * 1000.0;
+            double p_ms = ((p_t1 - p_t0) * 1000.0) / bench_reps;
 
             auto p_val = validateAllocation(p_res, original_slots, requests);
             double spd = (p_ms > 1e-6) ? (serial_ms / p_ms) : 0.0;
@@ -982,7 +1107,7 @@ int main(int argc, char* argv[]) {
     if (mode == "parallel" || mode == "both") {
         auto slots_copy = original_slots;
         double t0 = omp_get_wtime();
-        auto results = allocateParallel(slots_copy, requests, threads, CostWeights());
+        auto results = allocateParallel(slots_copy, requests, threads, CostWeights(), use_precomputation);
         double t1 = omp_get_wtime();
         double ms = (t1 - t0) * 1000.0;
 

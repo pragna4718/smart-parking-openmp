@@ -73,7 +73,8 @@ std::vector<AllocationResult> allocateParallel(
     std::vector<ParkingSlot>& slots,
     const std::vector<VehicleRequest>& requests,
     int num_threads,
-    const CostWeights& weights
+    const CostWeights& weights,
+    bool use_precomputation = true
 );
 
 #endif // GENERATOR_H

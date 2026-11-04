@@ -1,0 +1,223 @@
+
+######################################################
+ EXECUTING COMPREHENSIVE CORRECTNESS TEST SUITE
+######################################################
+
+[TEST 01/25] Empty Request List                                  : [PASS]
+[TEST 02/25] Empty Parking Lot                                   : [PASS]
+[TEST 03/25] One Vehicle One Compatible Slot                     : [PASS]
+[TEST 04/25] More Vehicles Than Slots (Oversubscription)         : [PASS]
+[TEST 05/25] More Slots Than Vehicles                            : [PASS]
+[TEST 06/25] No Compatible Slots                                 : [PASS]
+[TEST 07/25] EV Vehicle with EV and Non-EV Slots                 : [PASS]
+[TEST 08/25] Accessible Exclusivity Constraints                  : [PASS]
+[TEST 09/25] Large Vehicle Size Restrictions                     : [PASS]
+[TEST 10/25] Pre-Occupied Slots Protection                       : [PASS]
+[TEST 11/25] Equal-Cost Priority Tie-Breaking                    : [PASS]
+[TEST 12/25] Equal-Cost Equal-Priority Vehicle ID Tie-Breaking   : [PASS]
+[TEST 13/25] Nonsequential Vehicle IDs                           : [PASS]
+[TEST 14/25] Duplicate Vehicle IDs Rejection                     : [PASS]
+[TEST 15/25] Duplicate Slot IDs Rejection                        : [PASS]
+[TEST 16/25] Repeated Multi-Thread Consistency (1, 2, 4, 8 threads): [PASS]
+[TEST 17/25] High-Contention Stress Scenario                     : [PASS]
+[TEST 18/25] Validator Deliberate Error Detection                : [PASS]
+[TEST 19/25] Candidate Slot Tie-Breaking Preserves Large Slot    : [PASS]
+[TEST 20/25] Candidate Slot Tie-Breaking Preserves Accessible Slot: [PASS]
+[TEST 21/25] No Free Compatible Slot Left For Unassigned         : [PASS]
+[TEST 22/25] Repeated Concurrency Stress 50 Runs                 : [PASS]
+[TEST 23/25] Extreme Workload Ratios (High Oversub and Undersub) : [PASS]
+[TEST 24/25] Optimization Equivalence Invariant Check            : [PASS]
+[TEST 25/25] Dimension and Thread Clamping Validation            : [PASS]
+
+------------------------------------------------------
+ EXECUTING DOCUMENTED SCENARIOS (A, B, C, D)
+------------------------------------------------------
+
+======================================================
+ RUNNING SCENARIO: Scenario A: Small Functional Test
+ Configuration: 2 floors, 50 total slots, 20 vehicle requests, 4 OpenMP threads
+======================================================
+
+========================================
+ Validation Report: Serial Baseline (Scenario A: Small Functional Test)
+========================================
+ Status:              [PASS] ALL INVARIANTS SATISFIED
+ Total Requests:      20
+ Successfully Parked: 19
+ Unassigned / Turned: 1
+ Duplicate Bookings:  0
+ Incompatible Slots:  0
+ Total Solution Cost: 186.20
+ Average Cost / Car:  9.80
+========================================
+
+
+========================================
+ Validation Report: OpenMP Parallel (Scenario A: Small Functional Test)
+========================================
+ Status:              [PASS] ALL INVARIANTS SATISFIED
+ Total Requests:      20
+ Successfully Parked: 19
+ Unassigned / Turned: 1
+ Duplicate Bookings:  0
+ Incompatible Slots:  0
+ Total Solution Cost: 172.60
+ Average Cost / Car:  9.08
+========================================
+
+--- Performance Comparison (Scenario A: Small Functional Test) ---
+ Serial Parked / Total:   19 / 20
+ Parallel Parked / Total: 19 / 20
+ Serial Execution Time:   0.020 ms (avg over 200 runs)
+ Parallel Execution Time: 0.915 ms (avg over 200 runs)
+ Speedup:                 0.02x
+ Parallel Efficiency:     0.5%
+ Serial Throughput:       999986 req/sec
+ Parallel Throughput:     21858 req/sec
+ Serial Correctness:      [PASS]
+ Parallel Correctness:    [SUCCESS - ZERO DUPLICATES]
+======================================================
+
+
+======================================================
+ RUNNING SCENARIO: Scenario B: Oversubscribed Contention
+ Configuration: 2 floors, 100 total slots, 200 vehicle requests, 4 OpenMP threads
+======================================================
+
+========================================
+ Validation Report: Serial Baseline (Scenario B: Oversubscribed Contention)
+========================================
+ Status:              [PASS] ALL INVARIANTS SATISFIED
+ Total Requests:      200
+ Successfully Parked: 73
+ Unassigned / Turned: 127
+ Duplicate Bookings:  0
+ Incompatible Slots:  0
+ Total Solution Cost: 877.60
+ Average Cost / Car:  12.02
+========================================
+
+
+========================================
+ Validation Report: OpenMP Parallel (Scenario B: Oversubscribed Contention)
+========================================
+ Status:              [PASS] ALL INVARIANTS SATISFIED
+ Total Requests:      200
+ Successfully Parked: 71
+ Unassigned / Turned: 129
+ Duplicate Bookings:  0
+ Incompatible Slots:  0
+ Total Solution Cost: 457.60
+ Average Cost / Car:  6.45
+========================================
+
+--- Performance Comparison (Scenario B: Oversubscribed Contention) ---
+ Serial Parked / Total:   73 / 200
+ Parallel Parked / Total: 71 / 200
+ Serial Execution Time:   0.160 ms (avg over 50 runs)
+ Parallel Execution Time: 3.040 ms (avg over 50 runs)
+ Speedup:                 0.05x
+ Parallel Efficiency:     1.3%
+ Serial Throughput:       1249997 req/sec
+ Parallel Throughput:     65790 req/sec
+ Serial Correctness:      [PASS]
+ Parallel Correctness:    [SUCCESS - ZERO DUPLICATES]
+======================================================
+
+
+======================================================
+ RUNNING SCENARIO: Scenario C: Multi-Floor Fleet
+ Configuration: 4 floors, 1000 total slots, 800 vehicle requests, 4 OpenMP threads
+======================================================
+
+========================================
+ Validation Report: Serial Baseline (Scenario C: Multi-Floor Fleet)
+========================================
+ Status:              [PASS] ALL INVARIANTS SATISFIED
+ Total Requests:      800
+ Successfully Parked: 771
+ Unassigned / Turned: 29
+ Duplicate Bookings:  0
+ Incompatible Slots:  0
+ Total Solution Cost: 6693.20
+ Average Cost / Car:  8.68
+========================================
+
+
+========================================
+ Validation Report: OpenMP Parallel (Scenario C: Multi-Floor Fleet)
+========================================
+ Status:              [PASS] ALL INVARIANTS SATISFIED
+ Total Requests:      800
+ Successfully Parked: 756
+ Unassigned / Turned: 44
+ Duplicate Bookings:  0
+ Incompatible Slots:  0
+ Total Solution Cost: 5767.00
+ Average Cost / Car:  7.63
+========================================
+
+--- Performance Comparison (Scenario C: Multi-Floor Fleet) ---
+ Serial Parked / Total:   771 / 800
+ Parallel Parked / Total: 756 / 800
+ Serial Execution Time:   6.000 ms
+ Parallel Execution Time: 7.000 ms
+ Speedup:                 0.86x
+ Parallel Efficiency:     21.4%
+ Serial Throughput:       133333 req/sec
+ Parallel Throughput:     114285 req/sec
+ Serial Correctness:      [PASS]
+ Parallel Correctness:    [SUCCESS - ZERO DUPLICATES]
+======================================================
+
+
+======================================================
+ RUNNING SCENARIO: Scenario D: Large Scale Concurrency
+ Configuration: 4 floors, 5000 total slots, 4000 vehicle requests, 8 OpenMP threads
+======================================================
+
+========================================
+ Validation Report: Serial Baseline (Scenario D: Large Scale Concurrency)
+========================================
+ Status:              [PASS] ALL INVARIANTS SATISFIED
+ Total Requests:      4000
+ Successfully Parked: 3934
+ Unassigned / Turned: 66
+ Duplicate Bookings:  0
+ Incompatible Slots:  0
+ Total Solution Cost: 34080.80
+ Average Cost / Car:  8.66
+========================================
+
+
+========================================
+ Validation Report: OpenMP Parallel (Scenario D: Large Scale Concurrency)
+========================================
+ Status:              [PASS] ALL INVARIANTS SATISFIED
+ Total Requests:      4000
+ Successfully Parked: 3855
+ Unassigned / Turned: 145
+ Duplicate Bookings:  0
+ Incompatible Slots:  0
+ Total Solution Cost: 28099.60
+ Average Cost / Car:  7.29
+========================================
+
+--- Performance Comparison (Scenario D: Large Scale Concurrency) ---
+ Serial Parked / Total:   3934 / 4000
+ Parallel Parked / Total: 3855 / 4000
+ Serial Execution Time:   156.000 ms
+ Parallel Execution Time: 65.000 ms
+ Speedup:                 2.40x
+ Parallel Efficiency:     30.0%
+ Serial Throughput:       25641 req/sec
+ Parallel Throughput:     61538 req/sec
+ Serial Correctness:      [PASS]
+ Parallel Correctness:    [SUCCESS - ZERO DUPLICATES]
+======================================================
+
+######################################################
+ TEST SUITE SUMMARY: ALL TESTS & SCENARIOS PASSED!
+######################################################
+
+
